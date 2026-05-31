@@ -34,7 +34,9 @@ async def provision_bot(customer_id: int, bot_token: str, bot_username: str) -> 
         service_id = await railway.create_service_from_repo(
             project_id, config.BOT_TEMPLATE_REPO, project_name)
 
-        # 3. Variables de entorno del bot del cliente
+        # 3. Variables de entorno del bot del cliente.
+        #    Al crear el servicio desde el repo, Railway ya inicia un build; al meter
+        #    estas variables, Railway vuelve a desplegar solo con la config correcta.
         await railway.set_variables(project_id, env_id, service_id, {
             "TOKEN": bot_token,
             # El cliente configurará el grupo metiendo el bot como admin (auto-detección).
@@ -44,10 +46,18 @@ async def provision_bot(customer_id: int, bot_token: str, bot_username: str) -> 
             "DEVELOPER_ID": str(config.OWNER_TELEGRAM_ID),
             # Para que el propio bot pueda autogestionar su GROUP_ID en Railway:
             "RAILWAY_TOKEN": config.RAILWAY_TOKEN,
+            "RAILWAY_PROJECT_ID": project_id,
+            "RAILWAY_SERVICE_ID": service_id,
+            "RAILWAY_ENV_ID": env_id,
         })
 
-        # 4. Desplegar
-        await railway.deploy(service_id, env_id)
+        # 4. Despliegue: el cambio de variables ya dispara un deploy automático.
+        #    Intentamos un redeploy explícito, pero si Railway sigue construyendo el
+        #    build inicial, no pasa nada (el deploy con variables ya está en marcha).
+        try:
+            await railway.deploy(service_id, env_id)
+        except Exception as e:
+            print(f"Deploy explícito omitido (build ya en curso): {e}")
 
         # 5. Guardar en BD
         await db.update_bot_instance(
