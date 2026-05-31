@@ -138,22 +138,60 @@ async def webhook_stripe(request: Request):
     return JSONResponse({"recibido": True})
 
 
-# ─── Webhook del bot maestro (Managed Bots) ───────────────────────
+# ─── Webhook del bot maestro (menú + Managed Bots) ────────────────
 @app.post("/webhook/telegram")
 async def webhook_telegram(request: Request):
     """
-    Recibe updates del bot maestro. Cuando un cliente crea su bot vía Managed Bots,
-    aquí llega el evento, obtenemos el token y desplegamos.
+    Recibe TODOS los updates del bot maestro:
+      - /start                → mensaje de bienvenida con botón de compra
+      - botón "comprar"        → genera el pago de Stripe y manda el link
+      - bot creado (managed)   → obtiene el token, despliega y entrega
     """
     update = await request.json()
+
+    # 1) ¿Es un bot recién creado vía Managed Bots?
     creado = telegram_factory.extraer_bot_creado(update)
-    if not creado:
+    if creado:
+        await _procesar_bot_creado(creado)
         return {"ok": True}
 
+    # 2) ¿Pulsó un botón? (callback_query)
+    if "callback_query" in update:
+        cq = update["callback_query"]
+        chat_id = cq["from"]["id"]
+        data = cq.get("data", "")
+        try:
+            await telegram_factory.answer_callback(cq["id"])
+            if data == "comprar":
+                url = stripe_handler.crear_checkout(chat_id)
+                await telegram_factory.send_payment_link(chat_id, url)
+        except Exception as e:
+            log.exception("Error en callback: %s", e)
+        return {"ok": True}
+
+    # 3) ¿Es un mensaje de texto? (/start u otros)
+    msg = update.get("message")
+    if msg and "text" in msg:
+        chat_id = msg["chat"]["id"]
+        texto = msg["text"].strip()
+        try:
+            if texto.startswith("/start"):
+                await telegram_factory.send_welcome(chat_id)
+            else:
+                # Cualquier otro texto → reenseñar el menú
+                await telegram_factory.send_welcome(chat_id)
+        except Exception as e:
+            log.exception("Error atendiendo mensaje: %s", e)
+        return {"ok": True}
+
+    return {"ok": True}
+
+
+async def _procesar_bot_creado(creado: dict):
+    """Despliega y entrega el bot que un cliente acaba de crear."""
     log.info("🤖 Bot creado vía Managed Bots: %s", creado)
     try:
         token = await telegram_factory.get_managed_bot_token(creado["bot_id"])
-        # Buscar al cliente por su telegram_id (el dueño que creó el bot)
         owner_id = creado.get("owner_id")
         cust = None
         if owner_id:
@@ -161,6 +199,8 @@ async def webhook_telegram(request: Request):
                 cust = await conn.fetchrow(
                     "SELECT * FROM customers WHERE telegram_id = $1", owner_id)
         if cust:
+            await telegram_factory.send_message(
+                owner_id, "⏳ Creando y desplegando tu bot... dame unos segundos.")
             resultado = await provisioning.provision_bot(
                 cust["id"], token, creado["username"])
             await provisioning.entregar_al_cliente(owner_id, resultado["bot_username"])
@@ -169,8 +209,6 @@ async def webhook_telegram(request: Request):
             log.warning("Bot creado pero no encontré al cliente (owner_id=%s)", owner_id)
     except Exception as e:
         log.exception("Error procesando bot creado: %s", e)
-
-    return {"ok": True}
 
 
 # ─── Páginas de retorno ───────────────────────────────────────────

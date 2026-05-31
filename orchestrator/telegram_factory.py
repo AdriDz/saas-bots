@@ -48,6 +48,48 @@ async def get_master_username() -> str:
     return _master_username
 
 
+# ─────────────────────────────────────────────────────────────────
+# BOT MAESTRO INTERACTIVO (menú, botones, mensajes)
+# ─────────────────────────────────────────────────────────────────
+async def send_message(chat_id: int, text: str, reply_markup: dict | None = None):
+    params = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
+    if reply_markup:
+        params["reply_markup"] = reply_markup
+    await _call("sendMessage", params)
+
+
+async def answer_callback(callback_query_id: str, text: str = ""):
+    """Confirma la pulsación de un botón (quita el 'cargando')."""
+    await _call("answerCallbackQuery", {"callback_query_id": callback_query_id, "text": text})
+
+
+async def send_welcome(chat_id: int):
+    """Mensaje de bienvenida con botón de compra."""
+    texto = (
+        "👋 *¡Hola!*\n\n"
+        "Te monto un *bot de Telegram para tu canal VIP* que lo gestiona todo solo:\n\n"
+        "— Registra a quien entra y sale de tu grupo\n"
+        "— Manda mensajes masivos a todos tus miembros\n"
+        "— Avisa cuando alguien está por expirar\n"
+        "— Funciona 24/7 sin que toques nada\n\n"
+        "💰 *25€* de puesta en marcha + *5€/mes*\n\n"
+        "Pulsa el botón para empezar 👇"
+    )
+    teclado = {"inline_keyboard": [[{"text": "💳 Quiero mi bot", "callback_data": "comprar"}]]}
+    await send_message(chat_id, texto, teclado)
+
+
+async def send_payment_link(chat_id: int, url: str):
+    """Manda el botón con el link de pago de Stripe."""
+    texto = (
+        "Perfecto 🙌\n\n"
+        "Pulsa para pagar de forma segura. En cuanto completes el pago, "
+        "te mando aquí mismo el enlace para crear tu bot con el nombre que quieras."
+    )
+    teclado = {"inline_keyboard": [[{"text": "💳 Pagar ahora", "url": url}]]}
+    await send_message(chat_id, texto, teclado)
+
+
 async def check_can_manage_bots() -> bool:
     """Comprueba que el bot maestro tiene el permiso de gestión activado."""
     me = await _call("getMe")
