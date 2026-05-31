@@ -88,13 +88,9 @@ async def provision_bot(customer_id: int, bot_token: str, bot_username: str) -> 
             "RAILWAY_ENV_ID": env_id,
         })
 
-        # 4. Despliegue: el cambio de variables ya dispara un deploy automático.
-        #    Intentamos un redeploy explícito, pero si Railway sigue construyendo el
-        #    build inicial, no pasa nada (el deploy con variables ya está en marcha).
-        try:
-            await railway.deploy(service_id, env_id)
-        except Exception as e:
-            print(f"Deploy explícito omitido (build ya en curso): {e}")
+        # 4. No hace falta deploy explícito: meter las variables de golpe ya dispara
+        #    el único redeploy necesario (con la config completa). Lanzar otro deploy
+        #    aquí solo crearía instancias solapadas (conflicto de polling).
 
         # 5. Guardar en BD
         await db.update_bot_instance(

@@ -88,9 +88,26 @@ async def set_variable(project_id: str, env_id: str, service_id: str, name: str,
 
 
 async def set_variables(project_id: str, env_id: str, service_id: str, variables: dict[str, str]):
-    """Inyecta varias variables de golpe."""
-    for name, value in variables.items():
-        await set_variable(project_id, env_id, service_id, name, str(value))
+    """
+    Inyecta TODAS las variables en UNA sola llamada (variableCollectionUpsert).
+
+    Importante: hacerlo de una vez provoca UN único redeploy. Si se metieran una a
+    una, Railway redesplegaría por cada variable, y al ser un bot con polling se
+    pisarían varias instancias a la vez (error 'Conflict: terminated by other
+    getUpdates request').
+    """
+    query = """
+    mutation variableCollectionUpsert($input: VariableCollectionUpsertInput!) {
+      variableCollectionUpsert(input: $input)
+    }
+    """
+    payload = {"input": {
+        "projectId": project_id,
+        "environmentId": env_id,
+        "serviceId": service_id,
+        "variables": {k: str(v) for k, v in variables.items()},
+    }}
+    await _gql(query, payload)
 
 
 async def deploy(service_id: str, env_id: str) -> bool:
