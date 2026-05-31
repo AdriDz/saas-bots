@@ -43,6 +43,39 @@ async def estado():
     }
 
 
+# ─── Panel de administración (lo usa InfoBot) ─────────────────────
+def _check_admin_key(request: Request):
+    key = request.headers.get("x-admin-key") or request.query_params.get("key", "")
+    if not config.ADMIN_KEY or key != config.ADMIN_KEY:
+        raise HTTPException(401, "No autorizado")
+
+
+@app.get("/admin/bots")
+async def admin_listar_bots(request: Request):
+    """Lista todos los bots vendidos (para el panel de InfoBot)."""
+    _check_admin_key(request)
+    bots = await db.list_bots()
+    return {"bots": [dict(b) for b in bots]}
+
+
+@app.post("/admin/restart")
+async def admin_restart(request: Request):
+    """Reinicia el bot de un cliente. Body: {"instance_id": N}."""
+    _check_admin_key(request)
+    body = await request.json()
+    ok = await provisioning.restart_bot(int(body["instance_id"]))
+    return {"ok": ok}
+
+
+@app.post("/admin/delete")
+async def admin_delete(request: Request):
+    """Borra el bot de un cliente. Body: {"instance_id": N}."""
+    _check_admin_key(request)
+    body = await request.json()
+    ok = await provisioning.delete_bot(int(body["instance_id"]))
+    return {"ok": ok}
+
+
 # ─── Crear link de pago ───────────────────────────────────────────
 @app.post("/comprar")
 async def comprar(request: Request):

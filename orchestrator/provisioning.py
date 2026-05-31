@@ -137,6 +137,51 @@ async def resume_bot(customer_id: int) -> bool:
     return True
 
 
+async def restart_bot(instance_id: int) -> bool:
+    """Reinicia (redeploy) el bot de un cliente por su id de instancia."""
+    bot = await db.get_bot_by_id(instance_id)
+    if not bot or not bot["railway_service"]:
+        return False
+    await railway.deploy(bot["railway_service"], bot["railway_env"])
+    return True
+
+
+async def delete_bot(instance_id: int) -> bool:
+    """
+    Borra por completo el bot de un cliente:
+    elimina su proyecto de Railway, su base de datos, y lo marca como eliminado.
+    """
+    bot = await db.get_bot_by_id(instance_id)
+    if not bot:
+        return False
+    # 1. Borrar proyecto de Railway
+    if bot["railway_project"]:
+        try:
+            await railway.delete_project(bot["railway_project"])
+        except Exception as e:
+            print(f"Aviso al borrar proyecto Railway: {e}")
+    # 2. Borrar su base de datos del Postgres compartido
+    try:
+        base_url = config.CLIENT_DB_URL
+        if base_url:
+            dbname = f"bot_{bot['customer_id']}"
+            parsed = urlparse(base_url)
+            admin_url = urlunparse(parsed._replace(path="/postgres"))
+            conn = await asyncpg.connect(admin_url)
+            try:
+                # Cerrar conexiones y borrar la base
+                await conn.execute(
+                    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1", dbname)
+                await conn.execute(f'DROP DATABASE IF EXISTS "{dbname}"')
+            finally:
+                await conn.close()
+    except Exception as e:
+        print(f"Aviso al borrar base de datos: {e}")
+    # 3. Marcar como eliminado
+    await db.update_bot_instance(instance_id, status="deleted")
+    return True
+
+
 async def entregar_al_cliente(telegram_id: int, bot_username: str):
     """Le manda al cliente las instrucciones para usar su bot nuevo."""
     if not telegram_id:

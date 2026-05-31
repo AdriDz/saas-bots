@@ -35,6 +35,8 @@ BOT_TEMPLATE_REPO      = os.environ.get("BOT_TEMPLATE_REPO", "")     # ej: AdriD
 # ─── App ──────────────────────────────────────────────────────────
 PUBLIC_URL             = os.environ.get("PUBLIC_URL", "")  # URL pública del orquestador
 PORT                   = int(os.environ.get("PORT", "8000"))
+# Clave secreta para los endpoints de administración (los usa InfoBot)
+ADMIN_KEY              = os.environ.get("ADMIN_KEY", "")
 
 
 def validar() -> list[str]:

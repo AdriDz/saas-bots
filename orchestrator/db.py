@@ -144,3 +144,21 @@ async def get_bot_by_customer(customer_id: int):
         return await conn.fetchrow(
             "SELECT * FROM bot_instances WHERE customer_id = $1 ORDER BY id DESC LIMIT 1",
             customer_id)
+
+
+async def get_bot_by_id(instance_id: int):
+    async with (await pool()).acquire() as conn:
+        return await conn.fetchrow("SELECT * FROM bot_instances WHERE id = $1", instance_id)
+
+
+async def list_bots():
+    """Lista todos los bots desplegados con el id de Telegram de su dueño."""
+    async with (await pool()).acquire() as conn:
+        return await conn.fetch("""
+            SELECT b.id, b.bot_username, b.status, b.railway_project,
+                   b.railway_service, b.railway_env, c.telegram_id, c.id AS customer_id
+            FROM bot_instances b
+            JOIN customers c ON c.id = b.customer_id
+            WHERE b.status != 'deleted'
+            ORDER BY b.id DESC
+        """)

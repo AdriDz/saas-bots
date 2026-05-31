@@ -151,3 +151,10 @@ async def resume(service_id: str, env_id: str) -> bool:
     })
     await deploy(service_id, env_id)
     return True
+
+
+async def delete_project(project_id: str) -> bool:
+    """Borra por completo el proyecto de un bot (al eliminar un cliente)."""
+    query = "mutation projectDelete($id: String!) { projectDelete(id: $id) }"
+    await _gql(query, {"id": project_id})
+    return True
