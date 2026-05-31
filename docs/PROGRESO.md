@@ -25,19 +25,41 @@ STRIPE_PRICE_MONTHLY=price_1TdHH2Da9vsiC9hhyIeks4ZL
 
 ---
 
-## Pendiente de conseguir
+## Infraestructura ya montada (modo prueba)
 
-- [ ] `STRIPE_SECRET_KEY` (la clave secreta — se pone directa en Railway, no en el chat)
-- [ ] `STRIPE_WEBHOOK_SECRET` (al configurar el webhook, después de desplegar el orquestador)
-- [ ] `MASTER_BOT_TOKEN` (crear bot maestro en BotFather)
-- [ ] `OWNER_TELEGRAM_ID` (tu id de Telegram)
-- [x] `RAILWAY_TOKEN` (ya lo tenemos: el de siempre)
-- [ ] `BOT_TEMPLATE_REPO` (subir la plantilla del bot a GitHub)
-- [ ] `PUBLIC_URL` (al desplegar el orquestador en Railway)
+**Repos GitHub:**
+- Orquestador: `AdriDz/saas-bots`
+- Plantilla bot: `AdriDz/bot-template`
+
+**Railway — proyecto `saas-bots-orquestador`:**
+- Project ID: `189a3363-47cb-4e3f-afe1-9c974aef934f`
+- Environment ID: `bfcdfd55-e41d-46d0-919f-db2e329d7a3f`
+- Servicio orquestador ID: `b5bc4e71-639e-421e-951c-f47b157111eb`
+- URL pública: `https://orquestador-production-120a.up.railway.app`
+
+**Variables ya puestas en el orquestador:**
+- [x] `STRIPE_PRICE_SETUP`
+- [x] `STRIPE_PRICE_MONTHLY`
+- [x] `MASTER_BOT_TOKEN`
+- [x] `RAILWAY_TOKEN`
+- [x] `BOT_TEMPLATE_REPO`
+- [x] `MAX_PAYMENT_RETRIES`
+- [x] `PUBLIC_URL`
+
+---
+
+## Pendiente (lo poco que falta para probar)
+
+- [ ] **Postgres** → añadirlo en el panel de Railway (1 clic) para tener `DATABASE_URL`
+- [ ] `STRIPE_SECRET_KEY` → clave secreta de prueba (`sk_test_...`) de Stripe
+- [ ] `STRIPE_WEBHOOK_SECRET` → al crear el webhook en Stripe
+- [ ] `OWNER_TELEGRAM_ID` → tu id de Telegram
+- [ ] Crear el webhook de Stripe apuntando a la URL pública
+- [ ] Meter 1 bot en el pool para la prueba
 
 ---
 
 ## Siguiente paso
 
-Crear el **bot maestro** en BotFather y conseguir su token, o subir la plantilla
-del bot a GitHub. Ver `DEPLOYMENT.md`.
+Añadir Postgres en el panel de Railway y meter las 2 claves de Stripe.
+Ver el mensaje del chat para los pasos exactos.
