@@ -129,15 +129,16 @@ async def get_managed_bot_token(bot_id: int) -> str:
     """
     Obtiene el token de un bot gestionado ya creado.
     Se llama cuando recibimos el evento ManagedBotCreated.
+    El parámetro de la API es `user_id` (el id del bot creado).
     """
-    result = await _call("getManagedBotToken", {"bot_id": bot_id})
+    result = await _call("getManagedBotToken", {"user_id": bot_id})
     # La API devuelve el token como string
     return result if isinstance(result, str) else result.get("token", "")
 
 
 async def revoke_managed_bot_token(bot_id: int) -> str:
     """Revoca y regenera el token de un bot gestionado (por seguridad)."""
-    result = await _call("replaceManagedBotToken", {"bot_id": bot_id})
+    result = await _call("replaceManagedBotToken", {"user_id": bot_id})
     return result if isinstance(result, str) else result.get("token", "")
 
 
