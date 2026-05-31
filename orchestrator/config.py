@@ -7,6 +7,9 @@ import os
 
 # ─── Base de datos ────────────────────────────────────────────────
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
+# URL pública del Postgres compartido donde se crea una base de datos por bot.
+# Debe ser accesible desde otros proyectos de Railway (URL pública, no la privada).
+CLIENT_DB_URL = os.environ.get("CLIENT_DB_URL", "")
 
 # ─── Stripe ───────────────────────────────────────────────────────
 STRIPE_SECRET_KEY      = os.environ.get("STRIPE_SECRET_KEY", "")

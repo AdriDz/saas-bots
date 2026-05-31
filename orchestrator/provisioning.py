@@ -4,10 +4,43 @@ Orquestación: une todas las piezas.
 provision_bot()  → cuando un cliente paga: crea el bot, lo despliega y se lo entrega.
 pause_bot()      → cuando deja de pagar: pausa el bot.
 resume_bot()     → cuando vuelve a pagar: lo reactiva.
+
+Base de datos de cada bot: usamos UN Postgres compartido y creamos una base de
+datos separada por cliente (bot_<id>). Así no hace falta levantar un Postgres por
+cada bot. La conexión va por la URL pública del Postgres (CLIENT_DB_URL).
 """
 import secrets
+from urllib.parse import urlparse, urlunparse
+
+import asyncpg
 
 from . import config, db, railway, telegram_factory
+
+
+async def crear_base_datos_cliente(customer_id: int) -> str:
+    """
+    Crea una base de datos dedicada para el bot del cliente dentro del Postgres
+    compartido y devuelve la DATABASE_URL que usará ese bot.
+    """
+    base_url = config.CLIENT_DB_URL
+    if not base_url:
+        raise RuntimeError("Falta CLIENT_DB_URL (URL pública del Postgres compartido)")
+
+    dbname = f"bot_{customer_id}"
+    parsed = urlparse(base_url)
+
+    # Conectar a la base 'postgres' (admin) para poder crear la nueva base
+    admin_url = urlunparse(parsed._replace(path="/postgres"))
+    conn = await asyncpg.connect(admin_url)
+    try:
+        existe = await conn.fetchval("SELECT 1 FROM pg_database WHERE datname = $1", dbname)
+        if not existe:
+            await conn.execute(f'CREATE DATABASE "{dbname}"')
+    finally:
+        await conn.close()
+
+    # URL final que usará el bot del cliente
+    return urlunparse(parsed._replace(path=f"/{dbname}"))
 
 
 async def provision_bot(customer_id: int, bot_token: str, bot_username: str) -> dict:
@@ -34,11 +67,15 @@ async def provision_bot(customer_id: int, bot_token: str, bot_username: str) -> 
         service_id = await railway.create_service_from_repo(
             project_id, config.BOT_TEMPLATE_REPO, project_name)
 
+        # 2b. Base de datos dedicada para este bot (en el Postgres compartido)
+        bot_database_url = await crear_base_datos_cliente(customer_id)
+
         # 3. Variables de entorno del bot del cliente.
         #    Al crear el servicio desde el repo, Railway ya inicia un build; al meter
         #    estas variables, Railway vuelve a desplegar solo con la config correcta.
         await railway.set_variables(project_id, env_id, service_id, {
             "TOKEN": bot_token,
+            "DATABASE_URL": bot_database_url,
             # El cliente configurará el grupo metiendo el bot como admin (auto-detección).
             # GROUP_ID y ADMIN_ID se rellenan en el primer uso o se piden al cliente.
             "GROUP_ID": "0",
