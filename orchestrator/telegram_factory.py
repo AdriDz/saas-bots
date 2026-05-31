@@ -5,22 +5,28 @@ Creación automática de bots de Telegram usando "Managed Bots"
 Un BOT MAESTRO con el permiso `can_manage_bots` activado puede crear bots hijos
 en nombre del usuario, sin que el usuario tenga que hablar con @BotFather.
 
-Flujo:
-  1. El cliente abre el bot maestro y pulsa un botón (KeyboardButtonRequestManagedBot).
-  2. Telegram le muestra una pantalla pre-rellenada para crear el bot.
-  3. El cliente confirma con dos toques.
-  4. Llega un mensaje `ManagedBotCreated` con el id del bot nuevo.
-  5. Llamamos a `getManagedBotToken` para obtener el token y usarlo en el deploy.
+Flujo (con enlace mágico):
+  1. El cliente paga → el bot maestro le manda un enlace de creación.
+  2. El cliente abre el enlace → Telegram le muestra una pantalla de creación
+     pre-rellenada donde PUEDE PONER EL NOMBRE QUE QUIERA.
+  3. El cliente confirma → el bot queda creado y gestionado por el bot maestro.
+  4. Llega un update con `managed_bot` (ManagedBotUpdated) / mensaje `managed_bot_created`.
+  5. Llamamos a `getManagedBotToken` para obtener el token y desplegar.
 
-Como la API es muy nueva y las librerías aún no la soportan del todo, aquí se llama
-directamente a la API HTTP de Telegram. Si algo falla, ver el FALLBACK MANUAL abajo
-y en docs/MANAGED_BOTS.md.
+Formato del enlace (oficial):
+  https://t.me/newbot/{master_bot_username}/{username_sugerido}?name={nombre_sugerido}
+
+Se llama directo a la API HTTP de Telegram porque la función es muy nueva.
 """
+import secrets
 import aiohttp
 
 from . import config
 
 API_BASE = f"https://api.telegram.org/bot{config.MASTER_BOT_TOKEN}"
+
+# Cache del username del bot maestro (se rellena en la primera llamada)
+_master_username: str | None = None
 
 
 async def _call(method: str, params: dict | None = None) -> dict:
@@ -33,35 +39,46 @@ async def _call(method: str, params: dict | None = None) -> dict:
             return data["result"]
 
 
+async def get_master_username() -> str:
+    """Devuelve el @username del bot maestro (cacheado)."""
+    global _master_username
+    if _master_username is None:
+        me = await _call("getMe")
+        _master_username = me.get("username", "")
+    return _master_username
+
+
 async def check_can_manage_bots() -> bool:
     """Comprueba que el bot maestro tiene el permiso de gestión activado."""
     me = await _call("getMe")
     return bool(me.get("can_manage_bots"))
 
 
-async def send_create_bot_button(chat_id: int, nombre_sugerido: str = "Bot VIP"):
+def _sugerir_username() -> str:
+    """Genera un @username sugerido único (el cliente puede cambiarlo). Debe acabar en 'bot'."""
+    return f"vip{secrets.token_hex(4)}bot"
+
+
+async def send_create_bot_link(chat_id: int, nombre_sugerido: str = "Mi Bot VIP"):
     """
-    Manda al cliente un botón para crear su bot.
-    Al pulsarlo, Telegram abre la pantalla de creación pre-rellenada.
+    Manda al cliente el enlace para crear su bot.
+    Al abrirlo, Telegram muestra la pantalla de creación donde el cliente
+    elige el nombre y el @usuario que quiera.
     """
-    keyboard = {
-        "keyboard": [[{
-            "text": "🤖 Crear mi bot",
-            "request_managed_bot": {
-                "request_id": 1,
-                "name": nombre_sugerido,
-            },
-        }]],
-        "resize_keyboard": True,
-        "one_time_keyboard": True,
-    }
+    master = await get_master_username()
+    username_sug = _sugerir_username()
+    nombre_url = nombre_sugerido.replace(" ", "%20")
+    link = f"https://t.me/newbot/{master}/{username_sug}?name={nombre_url}"
+
+    keyboard = {"inline_keyboard": [[{"text": "🤖 Crear mi bot", "url": link}]]}
     await _call("sendMessage", {
         "chat_id": chat_id,
         "text": (
             "¡Pago recibido! 🎉\n\n"
-            "Pulsa el botón de abajo para crear tu bot. "
-            "Telegram te pedirá confirmar con dos toques y listo."
+            "Pulsa el botón para crear tu bot. En la pantalla que se abre puedes "
+            "ponerle el *nombre que quieras* y confirmar. ¡En unos segundos lo tendrás listo!"
         ),
+        "parse_mode": "Markdown",
         "reply_markup": keyboard,
     })
 
@@ -85,19 +102,26 @@ async def revoke_managed_bot_token(bot_id: int) -> str:
 def extraer_bot_creado(update: dict) -> dict | None:
     """
     Dado un update de Telegram, extrae la info del bot recién creado
-    si contiene un evento ManagedBotCreated.
+    si contiene un evento de Managed Bots.
 
-    Devuelve {"bot_id": int, "username": str} o None.
+    Devuelve {"bot_id": int, "username": str, "owner_id": int} o None.
+      - bot_id/username → del bot recién creado
+      - owner_id → el cliente que lo creó (para entregárselo)
     """
-    # El bot creado puede llegar como mensaje de servicio o como update managed_bot
     msg = update.get("message", {})
+    # managed_bot_created (en un mensaje) o managed_bot (ManagedBotUpdated, en el update)
     created = msg.get("managed_bot_created") or update.get("managed_bot")
     if not created:
         return None
+
     bot = created.get("bot", created)
+    # El dueño: en ManagedBotUpdated viene como "user"; si no, el "from" del mensaje
+    owner = created.get("user") or msg.get("from") or {}
+
     return {
         "bot_id": bot.get("id") or bot.get("bot_id"),
         "username": bot.get("username", ""),
+        "owner_id": owner.get("id"),
     }
 
 

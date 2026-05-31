@@ -86,29 +86,27 @@ async def webhook_stripe(request: Request):
             datos["stripe_customer"], datos["email"], datos["telegram_id"])
         await db.upsert_subscription(customer_id, datos["stripe_sub"], "active")
 
-        # Crear el bot: intenta Managed Bots; si no, del pool
-        bot = None
-        try:
-            bot = await telegram_factory.asignar_del_pool()
-        except Exception as e:
-            log.warning("Pool no disponible: %s", e)
-
-        if bot:
+        # VÍA PRINCIPAL — Managed Bots: mandamos al cliente el enlace de creación.
+        # El cliente elige el nombre, crea el bot, y el deploy se hace al recibir
+        # el evento en /webhook/telegram.
+        if datos["telegram_id"]:
             try:
-                resultado = await provisioning.provision_bot(
-                    customer_id, bot["token"], bot["username"])
-                if datos["telegram_id"]:
-                    await provisioning.entregar_al_cliente(
-                        datos["telegram_id"], resultado["bot_username"])
+                await telegram_factory.send_create_bot_link(datos["telegram_id"])
+                log.info("✉️ Enlace de creación enviado al cliente %s", customer_id)
             except Exception as e:
-                log.exception("Error provisionando bot")
-        else:
-            # Sin pool: avisar al cliente para crear el bot vía Managed Bots
-            if datos["telegram_id"]:
+                log.warning("No se pudo mandar el enlace de creación: %s", e)
+                # FALLBACK — pool de bots pre-creados
                 try:
-                    await telegram_factory.send_create_bot_button(datos["telegram_id"])
-                except Exception as e:
-                    log.warning("No se pudo mandar botón de creación: %s", e)
+                    bot = await telegram_factory.asignar_del_pool()
+                    if bot:
+                        resultado = await provisioning.provision_bot(
+                            customer_id, bot["token"], bot["username"])
+                        await provisioning.entregar_al_cliente(
+                            datos["telegram_id"], resultado["bot_username"])
+                except Exception:
+                    log.exception("Fallback de pool también falló")
+        else:
+            log.warning("Pago sin telegram_id: no se puede entregar el bot al cliente")
 
     # ── Pago mensual OK → resetear contador de fallos ──
     elif tipo == "invoice.paid":
@@ -155,17 +153,20 @@ async def webhook_telegram(request: Request):
     log.info("🤖 Bot creado vía Managed Bots: %s", creado)
     try:
         token = await telegram_factory.get_managed_bot_token(creado["bot_id"])
-        # Buscar al cliente por su telegram_id (quien creó el bot)
-        from_id = (update.get("message", {}).get("from", {}) or {}).get("id")
+        # Buscar al cliente por su telegram_id (el dueño que creó el bot)
+        owner_id = creado.get("owner_id")
         cust = None
-        if from_id:
+        if owner_id:
             async with (await db.pool()).acquire() as conn:
                 cust = await conn.fetchrow(
-                    "SELECT * FROM customers WHERE telegram_id = $1", from_id)
+                    "SELECT * FROM customers WHERE telegram_id = $1", owner_id)
         if cust:
             resultado = await provisioning.provision_bot(
                 cust["id"], token, creado["username"])
-            await provisioning.entregar_al_cliente(from_id, resultado["bot_username"])
+            await provisioning.entregar_al_cliente(owner_id, resultado["bot_username"])
+            log.info("✅ Bot desplegado y entregado al cliente %s", cust["id"])
+        else:
+            log.warning("Bot creado pero no encontré al cliente (owner_id=%s)", owner_id)
     except Exception as e:
         log.exception("Error procesando bot creado: %s", e)
 
