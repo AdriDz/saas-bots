@@ -45,14 +45,30 @@ def verificar_webhook(payload: bytes, sig_header: str):
     )
 
 
+def _g(obj, key, default=None):
+    """Lee una clave de un objeto de Stripe (StripeObject) o dict de forma segura.
+
+    El SDK de Stripe devuelve StripeObject, que NO soporta `.get()` como un dict
+    normal (el acceso a `.get` se interpreta como búsqueda de clave). Por eso
+    accedemos siempre por subíndice con manejo de errores.
+    """
+    try:
+        v = obj[key]
+    except (KeyError, TypeError):
+        return default
+    return v if v is not None else default
+
+
 def datos_checkout_completado(event) -> dict:
     """Extrae los datos relevantes de un evento checkout.session.completed."""
     session = event["data"]["object"]
+    cust_details = _g(session, "customer_details", {})
+    metadata = _g(session, "metadata", {})
     return {
-        "stripe_customer": session.get("customer"),
-        "stripe_sub": session.get("subscription"),
-        "email": session.get("customer_details", {}).get("email", ""),
-        "telegram_id": _int_or_none(session.get("metadata", {}).get("telegram_id")),
+        "stripe_customer": _g(session, "customer"),
+        "stripe_sub": _g(session, "subscription"),
+        "email": _g(cust_details, "email", ""),
+        "telegram_id": _int_or_none(_g(metadata, "telegram_id")),
     }
 
 
@@ -60,8 +76,8 @@ def datos_factura(event) -> dict:
     """Extrae datos de eventos invoice.paid / invoice.payment_failed."""
     invoice = event["data"]["object"]
     return {
-        "stripe_customer": invoice.get("customer"),
-        "stripe_sub": invoice.get("subscription"),
+        "stripe_customer": _g(invoice, "customer"),
+        "stripe_sub": _g(invoice, "subscription"),
     }
 
 
@@ -69,9 +85,9 @@ def datos_suscripcion(event) -> dict:
     """Extrae datos de eventos customer.subscription.*"""
     sub = event["data"]["object"]
     return {
-        "stripe_customer": sub.get("customer"),
-        "stripe_sub": sub.get("id"),
-        "status": sub.get("status"),
+        "stripe_customer": _g(sub, "customer"),
+        "stripe_sub": _g(sub, "id"),
+        "status": _g(sub, "status"),
     }
 
 
