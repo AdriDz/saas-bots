@@ -232,6 +232,14 @@ async def _procesar_bot_creado(creado: dict):
                 cust = await conn.fetchrow(
                     "SELECT * FROM customers WHERE telegram_id = $1", owner_id)
         if cust:
+            # Idempotencia: si Telegram reenvía el evento de creación, no provisionar
+            # un segundo bot para el mismo cliente (evita proyectos duplicados con el
+            # mismo token y el consiguiente conflicto de polling).
+            existente = await db.get_bot_by_customer(cust["id"])
+            if existente and existente["status"] in ("provisioning", "active"):
+                log.info("⏭️ Ya hay un bot (%s) para el cliente %s, ignoro evento duplicado",
+                         existente["status"], cust["id"])
+                return
             await telegram_factory.send_message(
                 owner_id, "⏳ Creando y desplegando tu bot... dame unos segundos.")
             resultado = await provisioning.provision_bot(
