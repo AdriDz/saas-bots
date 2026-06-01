@@ -346,9 +346,7 @@ async def broadcast_logic(bot, msg, broadcast_id):
     random.shuffle(users)
     total = len(users)
     enviados = fallidos = 0
-    # 15 mensajes por tanda con 15s de espera entre tandas: rápido pero seguro
-    # frente a los límites de Telegram (con el sleep de 0.3s por mensaje).
-    tanda_size, espera = 15, 15
+    tanda_size, espera = 5, 180
 
     await notify_admins(bot,
         f"🚀 <b>Difusión #{broadcast_id} iniciada</b> ({total} activos)\n📦 Tandas de 5 cada 3 min\n"
