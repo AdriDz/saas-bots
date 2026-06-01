@@ -64,18 +64,21 @@ async def answer_callback(callback_query_id: str, text: str = ""):
 
 
 async def send_welcome(chat_id: int):
-    """Mensaje de bienvenida con botón de compra."""
+    """Mensaje de bienvenida (vendedor) con botón de compra."""
     texto = (
-        "👋 *¡Hola!*\n\n"
-        "Te monto un *bot de Telegram para tu canal VIP* que lo gestiona todo solo:\n\n"
-        "— Registra a quien entra y sale de tu grupo\n"
-        "— Manda mensajes masivos a todos tus miembros\n"
-        "— Avisa cuando alguien está por expirar\n"
-        "— Funciona 24/7 sin que toques nada\n\n"
-        "💰 *25€* de puesta en marcha + *5€/mes*\n\n"
-        "Pulsa el botón para empezar 👇"
+        "🤖 *Tu canal VIP en piloto automático*\n\n"
+        "¿Cansado de gestionar accesos a mano, perseguir pagos y mandar mensajes uno a uno? "
+        "Yo te monto un bot que lo hace *todo solo*, 24/7:\n\n"
+        "✅ Registra automáticamente a quien entra a tu grupo\n"
+        "✅ Difusiones masivas a todos tus miembros con un solo mensaje\n"
+        "✅ Avisa solo cuando un acceso está a punto de caducar\n"
+        "✅ Expulsa a quien no renueva, sin que tú hagas nada\n"
+        "✅ Panel de control con botones, fácil para cualquiera\n\n"
+        "💸 *Sin comerte la cabeza con nada técnico:* lo creas en 2 toques y empieza a funcionar al instante.\n\n"
+        "*Precio:* 25€ de alta + 5€/mes. Cancelas cuando quieras.\n\n"
+        "👇 Dale al botón y ponle el nombre que tú quieras a tu bot"
     )
-    teclado = {"inline_keyboard": [[{"text": "💳 Quiero mi bot", "callback_data": "comprar"}]]}
+    teclado = {"inline_keyboard": [[{"text": "🚀 Crear mi bot ahora", "callback_data": "comprar"}]]}
     await send_message(chat_id, texto, teclado)
 
 

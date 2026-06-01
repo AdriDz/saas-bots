@@ -39,6 +39,10 @@ ADMINS = [ADMIN_ID] if ADMIN_ID else []
 BOT_USERNAME = ""   # se rellena al arrancar
 db_pool = None
 
+# Estado de la difusión en curso (para poder pararla)
+_difusion_activa = False
+_difusion_cancelar = False
+
 
 # ========================
 # BASE DE DATOS
@@ -165,16 +169,22 @@ async def railway_reiniciar_self() -> bool:
 # MENÚ DE BOTONES
 # ========================
 def menu_principal():
-    return InlineKeyboardMarkup([
+    filas = [
         [InlineKeyboardButton("👥 Mis usuarios", callback_data="usuarios")],
         [InlineKeyboardButton("📢 Anuncio de registro", callback_data="anuncio")],
         [InlineKeyboardButton("📣 Difundir un mensaje", callback_data="difundir")],
+    ]
+    # Si hay una difusión en marcha, mostrar el botón para pararla
+    if _difusion_activa:
+        filas.append([InlineKeyboardButton("⏹️ PARAR difusión", callback_data="parar")])
+    filas += [
         [InlineKeyboardButton("➕ Extender acceso", callback_data="extender"),
          InlineKeyboardButton("🚪 Quitar acceso",  callback_data="expulsar")],
         [InlineKeyboardButton("🗑️ Vaciar usuarios", callback_data="vaciar")],
         [InlineKeyboardButton("🔄 Reiniciar bot",   callback_data="reiniciar")],
         [InlineKeyboardButton("❓ Cómo funciona",   callback_data="ayuda")],
-    ])
+    ]
+    return InlineKeyboardMarkup(filas)
 
 
 def boton_volver():
@@ -307,7 +317,18 @@ async def nuevo_miembro(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ========================
 # BROADCAST
 # ========================
+async def _espera_cancelable(segundos):
+    """Espera troceada que se corta si se pide cancelar la difusión."""
+    for _ in range(int(segundos)):
+        if _difusion_cancelar:
+            return
+        await asyncio.sleep(1)
+
+
 async def broadcast_logic(bot, msg, broadcast_id):
+    global _difusion_activa, _difusion_cancelar
+    _difusion_activa = True
+    _difusion_cancelar = False
     users = list(await get_users())
     random.shuffle(users)
     total = len(users)
@@ -315,12 +336,20 @@ async def broadcast_logic(bot, msg, broadcast_id):
     tanda_size, espera = 5, 180
 
     await notify_admins(bot,
-        f"🚀 *Difusión #{broadcast_id} iniciada* ({total} activos)\n📦 Tandas de 5 cada 3 min")
+        f"🚀 *Difusión #{broadcast_id} iniciada* ({total} activos)\n📦 Tandas de 5 cada 3 min\n"
+        f"_Puedes pararla desde el menú con «Parar difusión»._")
 
     for i in range(0, total, tanda_size):
+        if _difusion_cancelar:
+            await notify_admins(bot,
+                f"⏹️ *Difusión #{broadcast_id} detenida.*\n✅ Enviados: *{enviados}* de {total}")
+            _difusion_activa = False
+            return
         tanda = users[i:i + tanda_size]
         ok, fail = [], []
         for row in tanda:
+            if _difusion_cancelar:
+                break
             try:
                 uid = row["user_id"]
                 if msg.photo:
@@ -354,10 +383,15 @@ async def broadcast_logic(bot, msg, broadcast_id):
             except Exception:
                 pass
         if i + tanda_size < total:
-            await asyncio.sleep(espera)
+            await _espera_cancelable(espera)
 
-    await notify_admins(bot,
-        f"🏁 *Difusión #{broadcast_id} finalizada*\n✅ {enviados} | ❌ {fallidos} | 👥 {total}")
+    _difusion_activa = False
+    if _difusion_cancelar:
+        await notify_admins(bot,
+            f"⏹️ *Difusión #{broadcast_id} detenida.*\n✅ Enviados: *{enviados}* de {total}")
+    else:
+        await notify_admins(bot,
+            f"🏁 *Difusión #{broadcast_id} finalizada*\n✅ {enviados} | ❌ {fallidos} | 👥 {total}")
 
 
 # ========================
@@ -489,6 +523,18 @@ async def boton(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🗑️ Hecho. Eliminados *{len(users)}* usuarios.", parse_mode="Markdown",
             reply_markup=boton_volver())
 
+    elif data == "parar":
+        global _difusion_cancelar
+        if _difusion_activa:
+            _difusion_cancelar = True
+            await query.edit_message_text(
+                "⏹️ Parando la difusión... no se enviará a más gente.",
+                reply_markup=boton_volver())
+        else:
+            await query.edit_message_text(
+                "ℹ️ No hay ninguna difusión en marcha ahora mismo.",
+                reply_markup=boton_volver())
+
     elif data == "reiniciar":
         await query.edit_message_text("🔄 Reiniciando tu bot... estará listo en ~30 segundos.")
         ok = await railway_reiniciar_self()
@@ -532,9 +578,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop("esperando", None)
         bid = await next_broadcast_id()
         asyncio.create_task(broadcast_logic(context.bot, update.message, bid))
+        await asyncio.sleep(0.5)  # dar tiempo a marcar la difusión como activa
         await update.message.reply_text(
-            f"🚀 *Difusión #{bid} en marcha.* Te voy informando.",
-            parse_mode="Markdown", reply_markup=boton_volver())
+            f"🚀 *Difusión #{bid} en marcha.* Te voy informando.\n\n"
+            f"Si te equivocaste, pulsa *⏹️ PARAR difusión*.",
+            parse_mode="Markdown", reply_markup=menu_principal())
         return
 
     if esperando == "extender":
