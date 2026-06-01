@@ -614,7 +614,7 @@ def construir_app():
     return app
 
 
-if _<i>name</i><i> == "</i><i>main</i>_":
+if __name__ == "__main__":
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     import time as _time
@@ -627,5 +627,5 @@ if _<i>name</i><i> == "</i><i>main</i>_":
             construir_app().run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
             break
         except Exception as e:
-            print(f"⚠️ Polling cortado ({type(e)._<i>name</i>_}: {e}). Reintento en 20s...")
+            print(f"⚠️ Polling cortado ({type(e).__name__}: {e}). Reintento en 20s...")
             _time.sleep(20)
