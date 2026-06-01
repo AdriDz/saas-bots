@@ -212,9 +212,14 @@ async def mi_estado(update: Update, context: ContextTypes.DEFAULT_TYPE):
     result = update.my_chat_member
     if not result:
         return
+    chat = result.chat
+    # Ignorar chats privados: cuando un usuario hace /start o (des)bloquea el bot
+    # también llega un my_chat_member, pero eso NO es "me añadieron a un grupo".
+    # Sin este filtro, el bot tomaría el chat privado como grupo y machacaría GROUP_ID.
+    if chat.type not in ("group", "supergroup", "channel"):
+        return
     old = result.old_chat_member.status
     new = result.new_chat_member.status
-    chat = result.chat
     quien = result.from_user
 
     if old in ("left", "kicked") and new in ("member", "administrator"):
