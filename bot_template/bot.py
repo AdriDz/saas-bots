@@ -45,6 +45,9 @@ db_pool = None
 # Estado de la difusión en curso (para poder pararla)
 _difusion_activa = False
 _difusion_cancelar = False
+# Referencia fuerte a la tarea de difusión: sin esto, el recolector de basura de
+# Python puede matar la tarea durante la espera entre tandas (se quedaría en la 1).
+_difusion_task = None
 
 
 # ========================
@@ -343,7 +346,9 @@ async def broadcast_logic(bot, msg, broadcast_id):
     random.shuffle(users)
     total = len(users)
     enviados = fallidos = 0
-    tanda_size, espera = 5, 180
+    # 15 mensajes por tanda con 15s de espera entre tandas: rápido pero seguro
+    # frente a los límites de Telegram (con el sleep de 0.3s por mensaje).
+    tanda_size, espera = 15, 15
 
     await notify_admins(bot,
         f"🚀 <b>Difusión #{broadcast_id} iniciada</b> ({total} activos)\n📦 Tandas de 5 cada 3 min\n"
@@ -573,7 +578,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if esperando == "broadcast":
         context.user_data.pop("esperando", None)
         bid = await next_broadcast_id()
-        asyncio.create_task(broadcast_logic(context.bot, update.message, bid))
+        global _difusion_task
+        # Guardar la referencia en un global para que el recolector de basura NO
+        # mate la tarea durante las esperas entre tandas.
+        _difusion_task = asyncio.create_task(broadcast_logic(context.bot, update.message, bid))
         await asyncio.sleep(0.5)  # dar tiempo a marcar la difusión como activa
         await update.message.reply_text(
             f"🚀 <b>Difusión #{bid} en marcha.</b> Te voy informando.\n\n"
