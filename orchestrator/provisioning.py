@@ -188,6 +188,48 @@ async def delete_bot(instance_id: int) -> bool:
     return True
 
 
+async def contar_usuarios_bot(instance_id: int) -> dict:
+    """
+    Lee la base de datos del bot de un cliente y devuelve un resumen de sus usuarios.
+    Devuelve {"total": N, "activos": N, "caducados": N, "ultimos": [...]}.
+    """
+    from datetime import date
+    bot = await db.get_bot_by_id(instance_id)
+    if not bot:
+        return {"error": "Bot no encontrado"}
+    base_url = config.CLIENT_DB_URL
+    if not base_url:
+        return {"error": "Falta CLIENT_DB_URL"}
+    dbname = f"bot_{bot['customer_id']}"
+    parsed = urlparse(base_url)
+    bot_db_url = urlunparse(parsed._replace(path=f"/{dbname}"))
+    try:
+        conn = await asyncpg.connect(bot_db_url, timeout=20)
+    except Exception as e:
+        return {"error": f"No pude conectar a {dbname}: {e}"}
+    try:
+        total = await conn.fetchval("SELECT count(*) FROM users")
+        activos = await conn.fetchval(
+            "SELECT count(*) FROM users WHERE expiry IS NULL OR expiry >= $1", date.today())
+        ultimos = await conn.fetch(
+            "SELECT full_name, username, expiry FROM users ORDER BY user_id DESC LIMIT 10")
+        return {
+            "total": total or 0,
+            "activos": activos or 0,
+            "caducados": (total or 0) - (activos or 0),
+            "ultimos": [
+                {"nombre": r["full_name"] or "Sin nombre",
+                 "username": r["username"] or "",
+                 "expiry": r["expiry"].strftime("%d/%m/%Y") if r["expiry"] else "sin límite"}
+                for r in ultimos
+            ],
+        }
+    except Exception as e:
+        return {"error": f"Error leyendo usuarios: {e}"}
+    finally:
+        await conn.close()
+
+
 async def entregar_al_cliente(telegram_id: int, bot_username: str):
     """Le manda al cliente las instrucciones para usar su bot nuevo."""
     if not telegram_id:

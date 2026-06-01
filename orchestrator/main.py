@@ -76,6 +76,14 @@ async def admin_delete(request: Request):
     return {"ok": ok}
 
 
+@app.get("/admin/bot-users")
+async def admin_bot_users(request: Request):
+    """Resumen de usuarios del bot de un cliente. Parámetro: ?instance_id=N."""
+    _check_admin_key(request)
+    instance_id = int(request.query_params.get("instance_id", "0"))
+    return await provisioning.contar_usuarios_bot(instance_id)
+
+
 # ─── Crear link de pago ───────────────────────────────────────────
 @app.post("/comprar")
 async def comprar(request: Request):
