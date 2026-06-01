@@ -244,6 +244,35 @@ async def _procesar_bot_creado(creado: dict):
         log.exception("Error procesando bot creado: %s", e)
 
 
+# ─── Portal de cliente (cancelar suscripción) ────────────────────
+@app.get("/portal")
+async def portal_cliente(request: Request):
+    """
+    Crea una sesión del portal de Stripe para que el cliente gestione su suscripción.
+    Parámetro: ?cid=stripe_customer_id
+    Redirige al portal de Stripe.
+    """
+    from fastapi.responses import RedirectResponse
+    import stripe
+    cid = request.query_params.get("cid", "")
+    if not cid:
+        raise HTTPException(400, "Falta el parámetro cid")
+    # Verificar que el customer existe en nuestra BD
+    cust = await db.get_customer_by_stripe(cid)
+    if not cust:
+        raise HTTPException(404, "Cliente no encontrado")
+    try:
+        stripe.api_key = config.STRIPE_SECRET_KEY
+        session = stripe.billing_portal.Session.create(
+            customer=cid,
+            return_url="https://t.me/MisVIPBots_bot",
+        )
+        return RedirectResponse(session.url)
+    except Exception as e:
+        log.exception("Error creando portal session: %s", e)
+        raise HTTPException(500, "Error al abrir el portal")
+
+
 # ─── Páginas de retorno ───────────────────────────────────────────
 @app.get("/exito", response_class=HTMLResponse)
 async def exito():

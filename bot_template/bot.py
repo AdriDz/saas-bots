@@ -35,6 +35,9 @@ RAILWAY_PROJECT_ID = os.environ.get("RAILWAY_PROJECT_ID", "")
 RAILWAY_SERVICE_ID = os.environ.get("RAILWAY_SERVICE_ID", "")
 RAILWAY_ENV_ID     = os.environ.get("RAILWAY_ENV_ID", "")
 
+ORCHESTRATOR_URL    = os.environ.get("ORCHESTRATOR_URL", "")
+STRIPE_CUSTOMER_ID  = os.environ.get("STRIPE_CUSTOMER_ID", "")
+
 ADMINS = [ADMIN_ID] if ADMIN_ID else []
 BOT_USERNAME = ""   # se rellena al arrancar
 db_pool = None
@@ -178,12 +181,14 @@ def menu_principal():
     if _difusion_activa:
         filas.append([InlineKeyboardButton("⏹️ PARAR difusión", callback_data="parar")])
     filas += [
-        [InlineKeyboardButton("➕ Extender acceso", callback_data="extender"),
-         InlineKeyboardButton("🚪 Quitar acceso",  callback_data="expulsar")],
         [InlineKeyboardButton("🗑️ Vaciar usuarios", callback_data="vaciar")],
         [InlineKeyboardButton("🔄 Reiniciar bot",   callback_data="reiniciar")],
         [InlineKeyboardButton("❓ Cómo funciona",   callback_data="ayuda")],
     ]
+    if ORCHESTRATOR_URL and STRIPE_CUSTOMER_ID:
+        filas.append([InlineKeyboardButton(
+            "❌ Cancelar suscripción",
+            url=f"{ORCHESTRATOR_URL}/portal?cid={STRIPE_CUSTOMER_ID}")])
     return InlineKeyboardMarkup(filas)
 
 
@@ -493,20 +498,6 @@ async def boton(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "_(o pulsa Menú para cancelar)_",
             parse_mode="Markdown", reply_markup=boton_volver())
 
-    elif data == "extender":
-        context.user_data["esperando"] = "extender"
-        await query.edit_message_text(
-            "➕ *Extender acceso*\n\nMándame el ID del usuario y los días, separados por un espacio.\n"
-            "Ejemplo: `123456789 30`\n\n_(o pulsa Menú para cancelar)_",
-            parse_mode="Markdown", reply_markup=boton_volver())
-
-    elif data == "expulsar":
-        context.user_data["esperando"] = "expulsar"
-        await query.edit_message_text(
-            "🚪 *Quitar acceso*\n\nMándame el ID del usuario al que quieres quitar el acceso.\n"
-            "Ejemplo: `123456789`\n\n_(o pulsa Menú para cancelar)_",
-            parse_mode="Markdown", reply_markup=boton_volver())
-
     elif data == "vaciar":
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("⚠️ Sí, vaciar todo", callback_data="vaciar_ok")],
@@ -556,13 +547,13 @@ AYUDA = (
     "y reciba los avisos en su privado.\n\n"
     "📣 *Difundir un mensaje*\n"
     "Pulsa el botón y escríbeme lo que quieras (texto, foto, vídeo...). Lo envío a todos "
-    "tus usuarios en tandas para que Telegram no te bloquee.\n\n"
-    "➕ *Extender acceso* / 🚪 *Quitar acceso*\n"
-    "Amplía o retira el acceso de un usuario por su ID.\n\n"
+    "tus usuarios en tandas para que Telegram no te bloquee. Si te equivocas, puedes pararlo.\n\n"
     "🗑️ *Vaciar usuarios*\n"
     "Borra todos los usuarios (para empezar de cero).\n\n"
-    "_Automático:_ cuando alguien entra a tu grupo se registra solo, y 3 días antes de "
-    "caducar se le avisa. Tú no tienes que hacer nada. 🤖"
+    "🔄 *Reiniciar bot*\n"
+    "Reinicia el bot si notas algo raro.\n\n"
+    "_Automático:_ cuando alguien entra a tu grupo se registra solo, cuando sale se le quita "
+    "el acceso, y 3 días antes de caducar se le avisa. Tú no tienes que hacer nada. 🤖"
 )
 
 
@@ -583,56 +574,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🚀 *Difusión #{bid} en marcha.* Te voy informando.\n\n"
             f"Si te equivocaste, pulsa *⏹️ PARAR difusión*.",
             parse_mode="Markdown", reply_markup=menu_principal())
-        return
-
-    if esperando == "extender":
-        context.user_data.pop("esperando", None)
-        partes = (update.message.text or "").split()
-        if len(partes) < 2 or not partes[0].isdigit() or not partes[1].lstrip('-').isdigit():
-            await update.message.reply_text("❌ Formato: `ID DIAS` (ej: `123456789 30`)",
-                                            parse_mode="Markdown", reply_markup=boton_volver())
-            return
-        user_id, dias = int(partes[0]), int(partes[1])
-        async with db_pool.acquire() as conn:
-            row = await conn.fetchrow("SELECT expiry, full_name FROM users WHERE user_id=$1", user_id)
-            if not row:
-                await update.message.reply_text("❌ Usuario no encontrado.", reply_markup=boton_volver())
-                return
-            base = max(row["expiry"], date.today()) if row["expiry"] else date.today()
-            nueva = base + timedelta(days=dias)
-            await conn.execute("UPDATE users SET expiry=$1 WHERE user_id=$2", nueva, user_id)
-        await update.message.reply_text(
-            f"✅ Acceso extendido.\n📅 Nueva fecha: *{nueva.strftime('%d/%m/%Y')}*",
-            parse_mode="Markdown", reply_markup=boton_volver())
-        try:
-            await context.bot.send_message(user_id,
-                f"✅ *Tu acceso ha sido renovado.*\n📅 Hasta: *{nueva.strftime('%d/%m/%Y')}*",
-                parse_mode="Markdown")
-        except Exception:
-            pass
-        return
-
-    if esperando == "expulsar":
-        context.user_data.pop("esperando", None)
-        txt = (update.message.text or "").strip()
-        if not txt.isdigit():
-            await update.message.reply_text("❌ Mándame solo el ID (números).",
-                                            reply_markup=boton_volver())
-            return
-        user_id = int(txt)
-        async with db_pool.acquire() as conn:
-            row = await conn.fetchrow("SELECT full_name FROM users WHERE user_id=$1", user_id)
-            if not row:
-                await update.message.reply_text("❌ Usuario no encontrado.", reply_markup=boton_volver())
-                return
-            await conn.execute("UPDATE users SET expiry=$1 WHERE user_id=$2",
-                               date.today() - timedelta(days=1), user_id)
-        await update.message.reply_text("✅ Acceso retirado.", reply_markup=boton_volver())
-        try:
-            await context.bot.send_message(user_id,
-                "❌ *Tu acceso al bot ha sido desactivado.*", parse_mode="Markdown")
-        except Exception:
-            pass
         return
 
     # Sin nada esperando → mostrar el menú
@@ -662,9 +603,7 @@ async def on_startup(app):
             pass
 
 
-if __name__ == "__main__":
-    if sys.platform == "win32":
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+def construir_app():
     app = ApplicationBuilder().token(TOKEN).post_init(on_startup).build()
     app.add_handler(ChatMemberHandler(nuevo_miembro, ChatMemberHandler.CHAT_MEMBER))
     app.add_handler(ChatMemberHandler(mi_estado, ChatMemberHandler.MY_CHAT_MEMBER))
@@ -672,5 +611,21 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("menu", start))
     app.add_handler(CallbackQueryHandler(boton))
     app.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.ALL & ~filters.COMMAND, handle_text))
+    return app
+
+
+if __name__ == "__main__":
+    if sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    import time as _time
     print("🤖 Bot plantilla corriendo...")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    # Si justo tras un redeploy queda otra instancia polleando unos segundos, habría
+    # un conflicto puntual. En vez de morir, reconstruimos la app y reintentamos hasta
+    # que la instancia vieja se apaga (drop_pending_updates ayuda a tomar el control).
+    while True:
+        try:
+            construir_app().run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+            break
+        except Exception as e:
+            print(f"⚠️ Polling cortado ({type(e).__name__}: {e}). Reintento en 20s...")
+            _time.sleep(20)

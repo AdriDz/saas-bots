@@ -73,19 +73,25 @@ async def provision_bot(customer_id: int, bot_token: str, bot_username: str) -> 
         # 3. Variables de entorno del bot del cliente.
         #    Al crear el servicio desde el repo, Railway ya inicia un build; al meter
         #    estas variables, Railway vuelve a desplegar solo con la config correcta.
+        # Buscar el stripe_customer_id del cliente
+        async with (await db.pool()).acquire() as conn:
+            cust_row = await conn.fetchrow(
+                "SELECT stripe_customer FROM customers WHERE id = $1", customer_id)
+        stripe_customer_id = cust_row["stripe_customer"] if cust_row else ""
+
         await railway.set_variables(project_id, env_id, service_id, {
             "TOKEN": bot_token,
             "DATABASE_URL": bot_database_url,
-            # El cliente configurará el grupo metiendo el bot como admin (auto-detección).
-            # GROUP_ID y ADMIN_ID se rellenan en el primer uso o se piden al cliente.
             "GROUP_ID": "0",
             "ADMIN_ID": "0",
             "DEVELOPER_ID": str(config.OWNER_TELEGRAM_ID),
-            # Para que el propio bot pueda autogestionar su GROUP_ID en Railway:
             "RAILWAY_TOKEN": config.RAILWAY_TOKEN,
             "RAILWAY_PROJECT_ID": project_id,
             "RAILWAY_SERVICE_ID": service_id,
             "RAILWAY_ENV_ID": env_id,
+            # Para que el cliente pueda cancelar su suscripción desde el bot
+            "ORCHESTRATOR_URL": config.PUBLIC_URL,
+            "STRIPE_CUSTOMER_ID": stripe_customer_id,
         })
 
         # 4. No hace falta deploy explícito: meter las variables de golpe ya dispara
