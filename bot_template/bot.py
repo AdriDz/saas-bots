@@ -17,6 +17,7 @@ import sys
 import os
 from datetime import date, timedelta, datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.error import RetryAfter, TimedOut, NetworkError, Forbidden
 from telegram.ext import (ApplicationBuilder, CommandHandler, CallbackQueryHandler,
                           MessageHandler, ChatMemberHandler, filters, ContextTypes)
 
@@ -338,6 +339,48 @@ async def _espera_cancelable(segundos):
         await asyncio.sleep(1)
 
 
+async def _enviar_mensaje(bot, uid, msg):
+    """Envia el mensaje (del tipo que sea) a un usuario."""
+    if msg.photo:
+        await bot.send_photo(uid, msg.photo[-1].file_id, caption=msg.caption, protect_content=True)
+    elif msg.video:
+        await bot.send_video(uid, msg.video.file_id, caption=msg.caption, protect_content=True)
+    elif msg.document:
+        await bot.send_document(uid, msg.document.file_id, caption=msg.caption, protect_content=True)
+    elif msg.audio:
+        await bot.send_audio(uid, msg.audio.file_id, caption=msg.caption, protect_content=True)
+    elif msg.voice:
+        await bot.send_voice(uid, msg.voice.file_id, caption=msg.caption, protect_content=True)
+    elif msg.sticker:
+        await bot.send_sticker(uid, msg.sticker.file_id, protect_content=True)
+    elif msg.animation:
+        await bot.send_animation(uid, msg.animation.file_id, caption=msg.caption, protect_content=True)
+    elif msg.text:
+        await bot.send_message(uid, msg.text, protect_content=True)
+
+
+async def _enviar_con_reintentos(bot, uid, msg, intentos=3):
+    """Devuelve 'ok', 'bloqueado' o 'error'.
+
+    Distingue los fallos TEMPORALES de Telegram (control de flujo / timeouts),
+    que se reintentan, de los DEFINITIVOS (el usuario bloqueo el bot o nunca le
+    dio a START), que no se reintentan y marcan al usuario para caducar.
+    """
+    for _ in range(intentos):
+        try:
+            await _enviar_mensaje(bot, uid, msg)
+            return "ok"
+        except RetryAfter as e:
+            await asyncio.sleep(getattr(e, "retry_after", 5) + 1)
+        except (TimedOut, NetworkError):
+            await asyncio.sleep(2)
+        except Forbidden:
+            return "bloqueado"
+        except Exception:
+            return "error"
+    return "error"
+
+
 async def broadcast_logic(bot, msg, broadcast_id):
     global _difusion_activa, _difusion_cancelar
     _difusion_activa = True
@@ -363,29 +406,25 @@ async def broadcast_logic(bot, msg, broadcast_id):
         for row in tanda:
             if _difusion_cancelar:
                 break
-            try:
-                uid = row["user_id"]
-                if msg.photo:
-                    await bot.send_photo(uid, msg.photo[-1].file_id, caption=msg.caption, protect_content=True)
-                elif msg.video:
-                    await bot.send_video(uid, msg.video.file_id, caption=msg.caption, protect_content=True)
-                elif msg.document:
-                    await bot.send_document(uid, msg.document.file_id, caption=msg.caption, protect_content=True)
-                elif msg.audio:
-                    await bot.send_audio(uid, msg.audio.file_id, caption=msg.caption, protect_content=True)
-                elif msg.voice:
-                    await bot.send_voice(uid, msg.voice.file_id, caption=msg.caption, protect_content=True)
-                elif msg.sticker:
-                    await bot.send_sticker(uid, msg.sticker.file_id, protect_content=True)
-                elif msg.animation:
-                    await bot.send_animation(uid, msg.animation.file_id, caption=msg.caption, protect_content=True)
-                elif msg.text:
-                    await bot.send_message(uid, msg.text, protect_content=True)
+            uid = row["user_id"]
+            resultado = await _enviar_con_reintentos(bot, uid, msg)
+            if resultado == "ok":
                 enviados += 1
                 ok.append(f"✅ {format_user(row)}")
-            except Exception:
+            elif resultado == "bloqueado":
                 fallidos += 1
-                fail.append(f"❌ {format_user(row)}")
+                fail.append(f"🚫 {format_user(row)} — bloqueo o no inicio el bot")
+                # Lo marcamos caducado para no reintentarlo en cada difusion.
+                # Si mas tarde le da a START estando en el grupo, se reactiva solo.
+                try:
+                    async with db_pool.acquire() as conn:
+                        await conn.execute("UPDATE users SET expiry=$1 WHERE user_id=$2",
+                                           date.today() - timedelta(days=1), uid)
+                except Exception:
+                    pass
+            else:
+                fallidos += 1
+                fail.append(f"❌ {format_user(row)} — error temporal")
             await asyncio.sleep(0.3)
 
         for admin_id in ADMINS:
