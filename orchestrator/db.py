@@ -64,6 +64,20 @@ async def init():
                 assigned_at TIMESTAMPTZ
             )
         """)
+        # Bots que el cliente ya creó pero cuyo despliegue falló (p. ej. Railway con los
+        # deploys pausados). Se reintentan solos cada pocos minutos.
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS pending_provisions (
+                bot_id       BIGINT PRIMARY KEY,
+                username     TEXT,
+                owner_id     BIGINT,
+                customer_id  INTEGER REFERENCES customers(id),
+                attempts     INTEGER DEFAULT 0,
+                last_error   TEXT,
+                created_at   TIMESTAMPTZ DEFAULT now(),
+                updated_at   TIMESTAMPTZ DEFAULT now()
+            )
+        """)
 
 
 async def pool() -> asyncpg.Pool:
@@ -162,3 +176,33 @@ async def list_bots():
             WHERE b.status != 'deleted'
             ORDER BY b.id DESC
         """)
+
+
+# ─── Despliegues pendientes (reintentos) ──────────────────────────
+async def add_pending_provision(bot_id: int, username: str, owner_id: int,
+                                customer_id: int, error: str):
+    async with (await pool()).acquire() as conn:
+        await conn.execute("""
+            INSERT INTO pending_provisions (bot_id, username, owner_id, customer_id, attempts, last_error)
+            VALUES ($1, $2, $3, $4, 1, $5)
+            ON CONFLICT (bot_id) DO UPDATE SET
+                attempts = pending_provisions.attempts + 1,
+                last_error = EXCLUDED.last_error,
+                updated_at = now()
+        """, bot_id, username, owner_id, customer_id, error[:500])
+
+
+async def list_pending_provisions():
+    async with (await pool()).acquire() as conn:
+        return await conn.fetch("SELECT * FROM pending_provisions ORDER BY created_at")
+
+
+async def delete_pending_provision(bot_id: int):
+    async with (await pool()).acquire() as conn:
+        await conn.execute("DELETE FROM pending_provisions WHERE bot_id = $1", bot_id)
+
+
+async def delete_pending_for_customer(customer_id: int):
+    """Cuando un cliente ya tiene su bot, sus otros intentos pendientes sobran."""
+    async with (await pool()).acquire() as conn:
+        await conn.execute("DELETE FROM pending_provisions WHERE customer_id = $1", customer_id)

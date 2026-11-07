@@ -19,6 +19,8 @@ STRIPE_PRICE_SETUP     = os.environ.get("STRIPE_PRICE_SETUP", "")    # 25€ pag
 STRIPE_PRICE_MONTHLY   = os.environ.get("STRIPE_PRICE_MONTHLY", "")  # 5€/mes
 # Reintentos de cobro fallido antes de pausar el bot
 MAX_PAYMENT_RETRIES    = int(os.environ.get("MAX_PAYMENT_RETRIES", "3"))
+# Cada cuántos minutos se reintentan los despliegues de bots que fallaron
+RETRY_PENDING_MINUTES  = max(1, int(os.environ.get("RETRY_PENDING_MINUTES", "10")))
 
 # ─── Telegram ─────────────────────────────────────────────────────
 # Token del BOT MAESTRO (el que crea los bots de los clientes)

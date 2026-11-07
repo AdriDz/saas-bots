@@ -11,7 +11,9 @@ Expone:
 
 Es el único servicio que hay que tener siempre encendido en Railway.
 """
+import asyncio
 import logging
+import time
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -30,6 +32,8 @@ async def startup():
     if faltan:
         log.warning("⚠️ Faltan variables de entorno: %s", ", ".join(faltan))
     await db.init()
+    # Guardamos la referencia para que el recolector de basura no mate la tarea
+    app.state.reintentos = asyncio.create_task(_bucle_reintentos())
     log.info("✅ Orquestador arrancado")
 
 
@@ -228,36 +232,118 @@ async def webhook_telegram(request: Request):
     return {"ok": True}
 
 
+# Telegram suele mandar el evento de "bot creado" dos veces seguidas. Sin esto, el
+# segundo intento choca con el límite de Railway (1 proyecto cada 30 s).
+_en_curso: dict[int, float] = {}
+VENTANA_DUPLICADOS = 120  # segundos
+
+
+async def _avisar_admin(texto: str):
+    """Aviso al dueño de la plataforma (texto plano: los errores rompen el Markdown)."""
+    if not config.OWNER_TELEGRAM_ID:
+        return
+    try:
+        await telegram_factory._call("sendMessage", {
+            "chat_id": config.OWNER_TELEGRAM_ID, "text": texto[:3500]})
+    except Exception:
+        log.exception("No se pudo avisar al admin")
+
+
+async def _desplegar_y_entregar(customer_id: int, bot_id: int, username: str, owner_id: int):
+    """Despliega el bot y se lo entrega al cliente. Lanza excepción si falla."""
+    token = await telegram_factory.get_managed_bot_token(bot_id)
+    resultado = await provisioning.provision_bot(customer_id, token, username)
+    await provisioning.entregar_al_cliente(owner_id, resultado["bot_username"])
+    await db.delete_pending_for_customer(customer_id)
+    log.info("✅ Bot @%s desplegado y entregado al cliente %s", username, customer_id)
+
+
 async def _procesar_bot_creado(creado: dict):
     """Despliega y entrega el bot que un cliente acaba de crear."""
     log.info("🤖 Bot creado vía Managed Bots: %s", creado)
+    bot_id = creado["bot_id"]
+    username = creado.get("username", "")
+    owner_id = creado.get("owner_id")
+
+    ahora = time.monotonic()
+    if ahora - _en_curso.get(bot_id, 0) < VENTANA_DUPLICADOS:
+        log.info("⏭️ Evento repetido para el bot %s, lo ignoro", bot_id)
+        return
+    _en_curso[bot_id] = ahora
+
+    cust = None
+    if owner_id:
+        async with (await db.pool()).acquire() as conn:
+            cust = await conn.fetchrow(
+                "SELECT * FROM customers WHERE telegram_id = $1", owner_id)
+    if not cust:
+        log.warning("Bot creado pero no encontré al cliente (owner_id=%s)", owner_id)
+        await _avisar_admin(
+            f"⚠️ Alguien creó el bot @{username} pero no encuentro su pago "
+            f"(telegram {owner_id}). Revísalo.")
+        return
+
+    # Idempotencia: si ya tiene un bot funcionando, no provisionar otro.
+    existente = await db.get_bot_by_customer(cust["id"])
+    if existente and existente["status"] in ("provisioning", "active"):
+        log.info("⏭️ Ya hay un bot (%s) para el cliente %s, ignoro el evento",
+                 existente["status"], cust["id"])
+        return
+
     try:
-        token = await telegram_factory.get_managed_bot_token(creado["bot_id"])
-        owner_id = creado.get("owner_id")
-        cust = None
-        if owner_id:
-            async with (await db.pool()).acquire() as conn:
-                cust = await conn.fetchrow(
-                    "SELECT * FROM customers WHERE telegram_id = $1", owner_id)
-        if cust:
-            # Idempotencia: si Telegram reenvía el evento de creación, no provisionar
-            # un segundo bot para el mismo cliente (evita proyectos duplicados con el
-            # mismo token y el consiguiente conflicto de polling).
-            existente = await db.get_bot_by_customer(cust["id"])
-            if existente and existente["status"] in ("provisioning", "active"):
-                log.info("⏭️ Ya hay un bot (%s) para el cliente %s, ignoro evento duplicado",
-                         existente["status"], cust["id"])
-                return
-            await telegram_factory.send_message(
-                owner_id, "⏳ Creando y desplegando tu bot... dame unos segundos.")
-            resultado = await provisioning.provision_bot(
-                cust["id"], token, creado["username"])
-            await provisioning.entregar_al_cliente(owner_id, resultado["bot_username"])
-            log.info("✅ Bot desplegado y entregado al cliente %s", cust["id"])
-        else:
-            log.warning("Bot creado pero no encontré al cliente (owner_id=%s)", owner_id)
+        await telegram_factory.send_message(
+            owner_id, "⏳ Creando y desplegando tu bot... dame unos segundos.")
+        await _desplegar_y_entregar(cust["id"], bot_id, username, owner_id)
     except Exception as e:
-        log.exception("Error procesando bot creado: %s", e)
+        log.exception("Error desplegando el bot @%s: %s", username, e)
+        await db.add_pending_provision(bot_id, username, owner_id, cust["id"], str(e))
+        try:
+            await telegram_factory._call("sendMessage", {
+                "chat_id": owner_id,
+                "text": (f"✅ Tu pago está confirmado y tu bot @{username} ya está creado.\n\n"
+                         "Ahora mismo el servidor va con retraso y estamos terminando de "
+                         "activarlo. No tienes que hacer nada más: te escribo por aquí en "
+                         "cuanto esté listo. 🙏"),
+            })
+        except Exception:
+            log.exception("No se pudo avisar al cliente del retraso")
+        await _avisar_admin(
+            f"🚨 Falló el despliegue de @{username} (cliente {cust['id']}, telegram {owner_id}).\n"
+            f"Error: {e}\n\nLo reintento solo cada {config.RETRY_PENDING_MINUTES} min.")
+
+
+async def _bucle_reintentos():
+    """Reintenta cada pocos minutos los despliegues que fallaron."""
+    while True:
+        await asyncio.sleep(config.RETRY_PENDING_MINUTES * 60)
+        try:
+            pendientes = await db.list_pending_provisions()
+        except Exception:
+            log.exception("No se pudieron leer los despliegues pendientes")
+            continue
+        for p in pendientes:
+            existente = await db.get_bot_by_customer(p["customer_id"])
+            if existente and existente["status"] in ("provisioning", "active"):
+                await db.delete_pending_provision(p["bot_id"])
+                continue
+            try:
+                await _desplegar_y_entregar(
+                    p["customer_id"], p["bot_id"], p["username"], p["owner_id"])
+                await _avisar_admin(
+                    f"✅ Reintento OK: @{p['username']} desplegado y entregado "
+                    f"(cliente {p['customer_id']}, intento {p['attempts'] + 1}).")
+            except Exception as e:
+                log.warning("Reintento fallido para @%s: %s", p["username"], e)
+                await db.add_pending_provision(
+                    p["bot_id"], p["username"], p["owner_id"], p["customer_id"], str(e))
+                # Avisar al admin a la hora sin desplegar (y luego cada ~6 h), no en cada intento
+                n = p["attempts"] + 1
+                cada = max(1, 60 // config.RETRY_PENDING_MINUTES)
+                if n == cada or n % (cada * 6) == 0:
+                    await _avisar_admin(
+                        f"⏰ @{p['username']} (cliente {p['customer_id']}) lleva {n} intentos "
+                        f"sin poder desplegarse.\nÚltimo error: {e}")
+            await asyncio.sleep(35)  # límite de Railway: 1 proyecto cada 30 s
 
 
 # ─── Portal de cliente (cancelar suscripción) ────────────────────
