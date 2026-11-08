@@ -14,6 +14,7 @@ import asyncpg
 import aiohttp
 import random
 import sys
+import html
 import os
 from datetime import date, timedelta, datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -227,6 +228,30 @@ async def mi_estado(update: Update, context: ContextTypes.DEFAULT_TYPE):
     quien = result.from_user
 
     if old in ("left", "kicked") and new in ("member", "administrator"):
+        # Solo el admin (o el desarrollador) puede cambiar el grupo del bot. Si lo añade
+        # cualquier otra persona a otro grupo, se sale y avisa, sin tocar GROUP_ID.
+        # ADMIN_ID == 0 es el alta inicial: quien lo añade por primera vez queda como admin.
+        autorizado = (ADMIN_ID == 0 or chat.id == GROUP_ID
+                      or (quien is not None and quien.id in (ADMIN_ID, DEVELOPER_ID)))
+        if not autorizado:
+            try:
+                await context.bot.leave_chat(chat.id)
+            except Exception:
+                pass
+            aviso = (f"⛔ <b>Alguien ha intentado añadir el bot a otro grupo</b>\n"
+                     f"📛 {html.escape(chat.title or 'Sin nombre')}\n"
+                     f"🆔 <code>{chat.id}</code>\n"
+                     f"👤 {html.escape(quien.full_name if quien else 'Desconocido')} "
+                     f"(<code>{quien.id if quien else '?'}</code>)\n\n"
+                     f"El bot se ha salido y sigue en tu grupo de siempre. "
+                     f"Para cambiar de grupo, tiene que añadirlo el admin.")
+            for destino in {ADMIN_ID, DEVELOPER_ID} - {0}:
+                try:
+                    await context.bot.send_message(chat_id=destino, text=aviso, parse_mode="HTML")
+                except Exception:
+                    pass
+            return
+
         GROUP_ID = chat.id
         await cfg_set("group_id", chat.id)
         await railway_set_var("GROUP_ID", chat.id)
