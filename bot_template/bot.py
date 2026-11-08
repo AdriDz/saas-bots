@@ -84,6 +84,37 @@ async def cfg_set(key, value):
             ON CONFLICT (key) DO UPDATE SET value = $2""", key, str(value))
 
 
+TANDA_DEFECTO, MINUTOS_DEFECTO = 5, 3
+TANDA_MAX, MINUTOS_MAX = 100, 120
+
+
+async def leer_tandas():
+    """Devuelve (personas por tanda, minutos entre tandas) configurados por el admin."""
+    async def entero(clave, defecto, maximo):
+        try:
+            valor = int(await cfg_get(clave))
+        except (TypeError, ValueError):
+            return defecto
+        return valor if 1 <= valor <= maximo else defecto
+    return (await entero("tanda_personas", TANDA_DEFECTO, TANDA_MAX),
+            await entero("tanda_minutos", MINUTOS_DEFECTO, MINUTOS_MAX))
+
+
+async def panel_tandas():
+    """Texto y botones de la pantalla «Tandas y tiempos»."""
+    personas, minutos = await leer_tandas()
+    texto = (f"⚙️ <b>Tandas y tiempos</b>\n\n"
+             f"📦 Personas por tanda: <b>{personas}</b>\n"
+             f"⏱️ Minutos entre tandas: <b>{minutos}</b>\n\n"
+             f"<i>Los cambios se aplican a la siguiente difusión. Cuanto más rápido envíes, "
+             f"más riesgo hay de que Telegram limite el bot.</i>")
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📦 Cambiar personas", callback_data="tanda_personas")],
+        [InlineKeyboardButton("⏱️ Cambiar minutos", callback_data="tanda_minutos")],
+        [InlineKeyboardButton("↩️ Menú", callback_data="menu")]])
+    return texto, kb
+
+
 async def next_broadcast_id():
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow(
@@ -181,6 +212,7 @@ def menu_principal():
         [InlineKeyboardButton("👥 Mis usuarios", callback_data="usuarios")],
         [InlineKeyboardButton("📢 Anuncio de registro", callback_data="anuncio")],
         [InlineKeyboardButton("📣 Difundir un mensaje", callback_data="difundir")],
+        [InlineKeyboardButton("⚙️ Tandas y tiempos", callback_data="tandas")],
     ]
     # Si hay una difusión en marcha, mostrar el botón para pararla
     if _difusion_activa:
@@ -414,10 +446,11 @@ async def broadcast_logic(bot, msg, broadcast_id):
     random.shuffle(users)
     total = len(users)
     enviados = fallidos = 0
-    tanda_size, espera = 5, 180
+    tanda_size, minutos = await leer_tandas()
+    espera = minutos * 60
 
     await notify_admins(bot,
-        f"🚀 <b>Difusión #{broadcast_id} iniciada</b> ({total} activos)\n📦 Tandas de 5 cada 3 min\n"
+        f"🚀 <b>Difusión #{broadcast_id} iniciada</b> ({total} activos)\n📦 Tandas de {tanda_size} cada {minutos} min\n"
         f"<i>Puedes pararla desde el menú con «Parar difusión».</i>")
 
     for i in range(0, total, tanda_size):
@@ -570,6 +603,22 @@ async def boton(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "<i>(o pulsa Menú para cancelar)</i>",
             parse_mode="HTML", reply_markup=boton_volver())
 
+    elif data == "tandas":
+        context.user_data.pop("esperando", None)
+        texto, kb = await panel_tandas()
+        await query.edit_message_text(texto, parse_mode="HTML", reply_markup=kb)
+
+    elif data in ("tanda_personas", "tanda_minutos"):
+        context.user_data["esperando"] = data
+        if data == "tanda_personas":
+            pregunta, maximo = "¿A cuántas personas envío en cada tanda?", TANDA_MAX
+        else:
+            pregunta, maximo = "¿Cuántos minutos espero entre tandas?", MINUTOS_MAX
+        await query.edit_message_text(
+            f"⚙️ {pregunta}\n\nEscríbeme un número del 1 al {maximo}.\n\n"
+            f"<i>(o pulsa Menú para cancelar)</i>",
+            parse_mode="HTML", reply_markup=boton_volver())
+
     elif data == "vaciar":
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("⚠️ Sí, vaciar todo", callback_data="vaciar_ok")],
@@ -620,6 +669,8 @@ AYUDA = (
     "📣 <b>Difundir un mensaje</b>\n"
     "Pulsa el botón y escríbeme lo que quieras (texto, foto, vídeo...). Lo envío a todos "
     "tus usuarios en tandas para que Telegram no te bloquee. Si te equivocas, puedes pararlo.\n\n"
+    "⚙️ <b>Tandas y tiempos</b>\n"
+    "Elige a cuántas personas se envía en cada tanda y cuántos minutos pasan entre una y otra.\n\n"
     "🗑️ <b>Vaciar usuarios</b>\n"
     "Borra todos los usuarios (para empezar de cero).\n\n"
     "🔄 <b>Reiniciar bot</b>\n"
@@ -649,6 +700,19 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🚀 <b>Difusión #{bid} en marcha.</b> Te voy informando.\n\n"
             f"Si te equivocaste, pulsa <b>⏹️ PARAR difusión</b>.",
             parse_mode="HTML", reply_markup=menu_principal())
+        return
+
+    if esperando in ("tanda_personas", "tanda_minutos"):
+        maximo = TANDA_MAX if esperando == "tanda_personas" else MINUTOS_MAX
+        texto = (update.message.text or "").strip()
+        if not texto.isdecimal() or not 1 <= int(texto) <= maximo:
+            await update.message.reply_text(
+                f"⚠️ Escríbeme solo un número del 1 al {maximo}.", reply_markup=boton_volver())
+            return
+        context.user_data.pop("esperando", None)
+        await cfg_set(esperando, int(texto))
+        panel, kb = await panel_tandas()
+        await update.message.reply_text("✅ Guardado.\n\n" + panel, parse_mode="HTML", reply_markup=kb)
         return
 
     # Sin nada esperando → mostrar el menú
