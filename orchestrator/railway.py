@@ -10,6 +10,10 @@ import aiohttp
 
 from . import config
 
+# Estados de un despliegue que hay que quitar para que el bot quede apagado.
+_ESTADOS_ACTIVOS = {"SUCCESS", "DEPLOYING", "INITIALIZING", "BUILDING",
+                    "QUEUED", "WAITING", "SLEEPING", "CRASHED"}
+
 
 async def _gql(query: str, variables: dict | None = None) -> dict:
     """Ejecuta una query/mutation contra la API de Railway."""
@@ -122,34 +126,34 @@ async def deploy(service_id: str, env_id: str) -> bool:
 
 
 async def pause(service_id: str, env_id: str) -> bool:
-    """Pausa el servicio (cuando el cliente deja de pagar)."""
+    """
+    Apaga el bot (cuando el cliente deja de pagar) quitando sus despliegues activos.
+
+    El servicio, sus variables y su base de datos se conservan. Railway rechaza
+    numReplicas = 0, así que no se puede apagar cambiando las réplicas. Si no queda
+    nada activo no hace nada, porque Stripe puede reenviar el mismo evento.
+    """
     query = """
-    mutation serviceInstanceUpdate($serviceId: String!, $environmentId: String!, $input: ServiceInstanceUpdateInput!) {
-      serviceInstanceUpdate(serviceId: $serviceId, environmentId: $environmentId, input: $input)
+    query deployments($input: DeploymentListInput!) {
+      deployments(first: 20, input: $input) { edges { node { id status } } }
     }
     """
-    # numReplicas = 0 apaga el servicio sin borrarlo
-    await _gql(query, {
-        "serviceId": service_id,
-        "environmentId": env_id,
-        "input": {"numReplicas": 0},
-    })
+    data = await _gql(query, {"input": {"serviceId": service_id, "environmentId": env_id}})
+    remove = "mutation deploymentRemove($id: String!) { deploymentRemove(id: $id) }"
+    for edge in data["deployments"]["edges"]:
+        if edge["node"]["status"] in _ESTADOS_ACTIVOS:
+            await _gql(remove, {"id": edge["node"]["id"]})
     return True
 
 
 async def resume(service_id: str, env_id: str) -> bool:
-    """Reanuda el servicio (cuando vuelve a pagar)."""
+    """Vuelve a desplegar la última versión del bot (cuando vuelve a pagar)."""
     query = """
-    mutation serviceInstanceUpdate($serviceId: String!, $environmentId: String!, $input: ServiceInstanceUpdateInput!) {
-      serviceInstanceUpdate(serviceId: $serviceId, environmentId: $environmentId, input: $input)
+    mutation serviceInstanceDeploy($serviceId: String!, $environmentId: String!) {
+      serviceInstanceDeploy(serviceId: $serviceId, environmentId: $environmentId, latestCommit: true)
     }
     """
-    await _gql(query, {
-        "serviceId": service_id,
-        "environmentId": env_id,
-        "input": {"numReplicas": 1},
-    })
-    await deploy(service_id, env_id)
+    await _gql(query, {"serviceId": service_id, "environmentId": env_id})
     return True
 
 
